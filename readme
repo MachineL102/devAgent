@@ -1,0 +1,10 @@
+$ENV:https_proxy = "http://127.0.0.1:7890"
+os.environ["https_proxy"] = "http://127.0.0.1:7890"
+Vertex AI RAG 引擎¶
+该vertex_ai_rag_retrieval工具允许代理使用 Vertex AI RAG Engine 执行私人数据检索。
+
+当您将 Grounding 与 Vertex AI RAG Engine 结合使用时，您需要事先准备一个 RAG 语料库。请参阅RAG ADK 代理示例或Vertex AI RAG Engine 页面进行设置。
+
+
+Vertex AI 搜索¶
+该工具vertex_ai_search_tool使用 Google Cloud Vertex AI Search，使代理能够搜索您已配置的私有数据存储（例如内部文档、公司政策、知识库）。此内置工具要求您在配置期间提供特定的数据存储 ID。有关该工具的更多详细信息，请参阅了解 Vertex AI Search 基础知识。
