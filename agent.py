@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import sys
 from google.adk.agents import LoopAgent, LlmAgent, BaseAgent, SequentialAgent
 from google.genai import types
 from google.adk.runners import InMemoryRunner
@@ -12,12 +13,14 @@ from google.adk.events import Event, EventActions
 from google.adk.tools.mcp_tool.mcp_toolset import MCPToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams
 from mcp import StdioServerParameters
+
 # --- Constants ---
 APP_NAME = "webapp_dev_app" # webapp Development App Name
 USER_ID = "dev_user_01"
 SESSION_ID_BASE = "dev_test_refine_session" # Development Session ID
 GEMINI_MODEL = "gemini-2.5-flash"
 STATE_REQUIREMENT = "requirement"
+STATE_USER_REQUEST = "user_request"
 
 # --- State Keys ---
 STATE_CURRENT_PROJECT = "current_project"
@@ -116,6 +119,11 @@ def exit_loop(tool_context: ToolContext):
   # Return empty dict as tools should typically return JSON-serializable output
   return {}
 
+def get_user_input(tool_context: ToolContext, prompt: str = "Please provide your feedback or next requirement: "):
+    """Pauses the agent to wait for user input from the command line."""
+    print(f"\n>>> [User Input Needed] {prompt}")
+    user_in = input(">>> ")
+    return {"user_input": user_in}
 
 # --- Agent Definitions ---
 
@@ -129,6 +137,9 @@ initial_developer_agent = LlmAgent(
     1.First summary a project name,and create the new project using command: flutter create <project_name>
     2.Design the main functions of the software.
     3.Modify the *first version* of project within a new folder based on the requirement provided below.
+
+    Requirement:
+    {{requirement}}
 
     Output *only* the project absolute folder path and the project description.
 """,
@@ -145,10 +156,16 @@ tester_agent_in_loop = LlmAgent(
     include_contents='none',
     instruction=f"""You are a Web application Tester reviewing project for functionality and quality.
 
-    **project to Test:**
+    **Project to Test:**
     ```
     {{current_project}}
     ```
+
+    **Initial Requirements:**
+    {{requirement}}
+
+    **Latest User Request:**
+    {{user_request}}
 
     **Task:**
     1.Record all features to be tested and their completion status.
@@ -205,13 +222,67 @@ development_loop = LoopAgent(
     max_iterations=20 # Limit loops
 )
 
-# STEP 3: Overall Sequential Pipeline
+# STEP 3: Interactive Session Agents (Continuous Improvement)
+
+user_interface_agent = LlmAgent(
+    name="UserInterfaceAgent",
+    model=GEMINI_MODEL,
+    include_contents='none',
+    instruction=f"""You are the interface between the user and the development process.
+    1. Ask the user what they want to do next using the `get_user_input` tool.
+    2. If the user wants to quit (e.g., types 'exit', 'quit', 'done'), call the `exit_loop` tool to end the session.
+    3. Otherwise, output the user's request exactly.
+
+    Output *only* the user's request.
+""",
+    description="Gets instructions from the user.",
+    tools=[get_user_input, exit_loop],
+    output_key=STATE_USER_REQUEST
+)
+
+feature_developer_agent = LlmAgent(
+    name="FeatureDeveloperAgent",
+    model=GEMINI_MODEL,
+    include_contents='none',
+    instruction=f"""You are a Flutter Web Developer.
+    **Current Project:**
+    ```
+    {{current_project}}
+    ```
+    **User Request:**
+    ```
+    {{user_request}}
+    ```
+
+    **Task:**
+    Implement the user's request by modifying the project files or running commands.
+    Use the available tools to explore the code and apply changes.
+
+    Output the project path.
+""",
+    description="Implements new features based on user request.",
+    tools=dev_tools, # Needs filesystem and process control
+    output_key=STATE_CURRENT_PROJECT
+)
+
+interactive_session = LoopAgent(
+    name="InteractiveSession",
+    sub_agents=[
+        user_interface_agent,
+        feature_developer_agent,
+        development_loop # Re-verify the project after features are added
+    ],
+    max_iterations=100
+)
+
+# STEP 4: Overall Sequential Pipeline
 # For ADK tools compatibility, the root agent must be named `root_agent`
 root_agent = SequentialAgent(
     name="WebApplicationDevelopmentPipeline",
     sub_agents=[
         initial_developer_agent, # Run first to create initial project
-        development_loop         # Then run the test/refine loop
+        development_loop,        # Stabilize initial project
+        interactive_session      # Enter interactive mode for continuous improvement
     ],
-    description="Creates initial project and then iteratively tests and refines it using an exit tool."
+    description="Creates initial project and then iteratively tests and refines it, allowing for user-driven continuous improvement."
 )
